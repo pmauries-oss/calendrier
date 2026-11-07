@@ -183,7 +183,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       <input type="file" id="fileIn" accept=".json,application/json" hidden>
     </div>
     <div class="foot">
-      <button class="btn btn-ghost" id="btnCsv" hidden>Exporter en CSV</button>
+      <button class="btn btn-main" id="btnCsv" hidden style="flex:1 1 100%">Exporter en Excel (passages + bilan)</button>
       <button class="btn btn-ghost" id="btnReset">Tout effacer</button>
     </div>
   </section>
@@ -254,9 +254,9 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   async function init(){
     store = localStore();
     if(!window.claude || !window.claude.use){
-      // version téléchargée : export CSV classique + sauvegarde fichier
+      // version téléchargée : export Excel + sauvegarde fichier
       $("btnCsv").hidden=false; $("bakBox").hidden=false; $("btnLoc").hidden=false;
-      $("btnCsv").onclick=()=>exportCsv({save:({filename,data})=>{const a=document.createElement("a");a.href=URL.createObjectURL(data);a.download=filename;document.body.append(a);a.click();a.remove();return Promise.resolve();}});
+      $("btnCsv").onclick=()=>exportXlsx(null);
       return;
     }
     try{
@@ -287,7 +287,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     }catch(e){ /* on reste en local */ }
     try{
       const dl = await window.claude.use("downloads");
-      if(dl){ $("btnCsv").hidden=false; $("btnCsv").onclick=()=>exportCsv(dl); }
+      if(dl){ $("btnCsv").hidden=false; $("btnCsv").onclick=()=>exportXlsx(dl); }
     }catch(e){}
   }
 
@@ -463,15 +463,100 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     }catch(e){ toast("Fichier de sauvegarde illisible"); }
   });
 
-  /* ---------- Export ---------- */
-  async function exportCsv(dl){
-    const esc=v=>'"'+String(v??"").replace(/"/g,'""')+'"';
-    const rows=[["N°","Rue","Nom","Montant (€)","Paiement","Statut","Remarque","Date"]];
-    entries.slice().sort((a,b)=>(a.rue||"").localeCompare(b.rue||"","fr")||numKey(a.num)-numKey(b.num))
-      .forEach(e=>rows.push([e.num,e.rue,e.nom,e.absent?"":String(e.montant).replace(".",","),e.mode,e.absent?"À repasser":"Payé",e.note,new Date(e.ts).toLocaleDateString("fr-FR")]));
-    const csv="\uFEFF"+rows.map(r=>r.map(esc).join(";")).join("\r\n");
-    try{ await dl.save({filename:"tournee-calendriers.csv", data:new Blob([csv],{type:"text/csv"})}); }
-    catch(e){ toast("Export annulé"); }
+  /* ---------- Export Excel (2 onglets) ---------- */
+  let xlLoading=null;
+  function loadExcel(){
+    if(window.ExcelJS) return Promise.resolve(window.ExcelJS);
+    if(!xlLoading) xlLoading=new Promise((res,rej)=>{
+      const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js";
+      s.onload=()=>window.ExcelJS?res(window.ExcelJS):rej(new Error("load"));
+      s.onerror=()=>{ xlLoading=null; s.remove(); rej(new Error("load")); };
+      document.head.append(s);
+    });
+    return xlLoading;
+  }
+  async function buildWorkbook(ExcelJS, list){
+    const RED="FFC1121F", INK="FF1C2430", LIGHT="FFF3F4F6", EUR='#,##0.00 "€"';
+    const sorted=list.slice().sort((a,b)=>(a.rue||"").localeCompare(b.rue||"","fr")||numKey(a.num)-numKey(b.num));
+    const paid=sorted.filter(e=>!e.absent), abs=sorted.filter(e=>e.absent);
+    const sum=paid.reduce((s,e)=>s+(+e.montant||0),0);
+    const wb=new ExcelJS.Workbook(); wb.creator="Tournée des calendriers"; wb.created=new Date();
+    const head=(row)=>{ row.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:RED}}; c.alignment={vertical:"middle"}; }); row.height=22; };
+
+    /* Onglet 1 : Passages */
+    const ws=wb.addWorksheet("Passages",{views:[{state:"frozen",ySplit:1}]});
+    ws.columns=[{header:"N°",key:"num",width:7},{header:"Rue",key:"rue",width:30},{header:"Nom",key:"nom",width:28},
+      {header:"Montant",key:"montant",width:12,style:{numFmt:EUR}},{header:"Paiement",key:"mode",width:11},
+      {header:"Statut",key:"statut",width:12},{header:"Remarque",key:"note",width:32},{header:"Date",key:"date",width:12,style:{numFmt:"dd/mm/yyyy"}}];
+    head(ws.getRow(1));
+    sorted.forEach(e=>{
+      const n=parseInt(e.num,10);
+      const r=ws.addRow({num:(String(n)===String(e.num).trim()?n:(e.num||"")),rue:e.rue||"",nom:e.nom||"",
+        montant:e.absent?null:(+e.montant||0),mode:e.mode||"",statut:e.absent?"À repasser":"Payé",note:e.note||"",date:new Date(e.ts)});
+      if(e.absent) r.getCell("statut").font={bold:true,color:{argb:"FFB45309"}};
+    });
+    const last=ws.rowCount;
+    ws.autoFilter={from:"A1",to:{row:Math.max(last,1),column:8}};
+    const tr=ws.addRow({rue:"TOTAL",nom:paid.length+" calendrier"+(paid.length>1?"s":"")});
+    tr.getCell("montant").value=last>1?{formula:"SUM(D2:D"+last+")",result:sum}:0;
+    tr.eachCell({includeEmpty:true},c=>{ c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:LIGHT}}; c.border={top:{style:"medium",color:{argb:INK}}}; });
+
+    /* Onglet 2 : Bilan */
+    const b=wb.addWorksheet("Bilan");
+    b.columns=[{width:30},{width:14},{width:14},{width:14}];
+    b.mergeCells("A1:D1");
+    const t=b.getCell("A1"); t.value="Tournée des calendriers : bilan"; t.font={bold:true,size:16,color:{argb:"FFFFFFFF"}};
+    t.fill={type:"pattern",pattern:"solid",fgColor:{argb:RED}}; b.getRow(1).height=30; t.alignment={vertical:"middle"};
+    b.getCell("A2").value="Export du "+new Date().toLocaleDateString("fr-FR")+" à "+new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
+    b.getCell("A2").font={italic:true,color:{argb:"FF5F6B7A"}};
+    const kv=(label,val,fmt)=>{ const r=b.addRow([label,val]); r.getCell(1).font={bold:true}; if(fmt) r.getCell(2).numFmt=fmt; return r; };
+    b.addRow([]);
+    const totRow=kv("Total collecté",sum,EUR); totRow.getCell(2).font={bold:true,size:14,color:{argb:RED}};
+    kv("Calendriers distribués",paid.length);
+    kv("Moyenne par calendrier",paid.length?sum/paid.length:0,EUR);
+    kv("Adresses à repasser",abs.length);
+
+    b.addRow([]);
+    head(b.addRow(["Par mode de paiement","Nombre","Montant"]));
+    ["Espèces","Chèque","CB"].forEach(m=>{
+      const l=paid.filter(e=>e.mode===m);
+      const r=b.addRow([m==="Chèque"?"Chèques":m,l.length,l.reduce((s,e)=>s+(+e.montant||0),0)]); r.getCell(3).numFmt=EUR;
+    });
+    const tm=b.addRow(["Total",paid.length,sum]); tm.getCell(3).numFmt=EUR;
+    tm.eachCell({includeEmpty:true},c=>{ c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:LIGHT}}; });
+
+    b.addRow([]);
+    head(b.addRow(["Par rue","Calendriers","Montant","À repasser"]));
+    const rues=[...new Set(sorted.map(e=>e.rue||"Sans rue"))];
+    rues.forEach(rue=>{
+      const l=sorted.filter(e=>(e.rue||"Sans rue")===rue), p=l.filter(e=>!e.absent);
+      const r=b.addRow([rue,p.length,p.reduce((s,e)=>s+(+e.montant||0),0),l.length-p.length]); r.getCell(3).numFmt=EUR;
+    });
+    const tr2=b.addRow(["Total",paid.length,sum,abs.length]); tr2.getCell(3).numFmt=EUR;
+    tr2.eachCell({includeEmpty:true},c=>{ c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:LIGHT}}; });
+    return wb;
+  }
+  async function exportXlsx(dl){
+    if(!entries.length){ toast("Aucun passage à exporter"); return; }
+    const btn=$("btnCsv"), lbl=btn.textContent; btn.disabled=true; btn.textContent="Préparation…";
+    let blob;
+    try{
+      const ExcelJS=await loadExcel();
+      const wb=await buildWorkbook(ExcelJS, entries);
+      blob=new Blob([await wb.xlsx.writeBuffer()],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    }catch(e){ toast("Connexion internet nécessaire pour créer le fichier Excel"); btn.disabled=false; btn.textContent=lbl; return; }
+    const name="tournee-calendriers-"+new Date().toISOString().slice(0,10)+".xlsx";
+    try{
+      if(dl){ await dl.save({filename:name,data:blob}); }
+      else{
+        const file=new File([blob],name,{type:blob.type});
+        if(navigator.canShare && navigator.canShare({files:[file]})) await navigator.share({files:[file],title:"Tournée des calendriers"});
+        else { const a=document.createElement("a"); a.href=URL.createObjectURL(file); a.download=name; document.body.append(a); a.click(); a.remove(); }
+      }
+      toast("Fichier Excel prêt");
+    }catch(e){ if(!e || e.name!=="AbortError") toast("Export annulé"); }
+    finally{ btn.disabled=false; btn.textContent=lbl; }
   }
 
   init();
