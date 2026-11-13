@@ -3,14 +3,6 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-<link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#C1121F">
-<meta name="apple-mobile-web-app-title" content="Calendriers">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Tournée des calendriers</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -102,6 +94,11 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
 .bak{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 .bak p{margin:0 0 10px;font-size:14px;color:var(--muted)}
 .bak .actions{margin-top:0}
+.rv{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.rv input,.rv select{min-height:40px;padding:6px 8px;min-width:0}
+.rv input[type=checkbox]{width:24px;height:24px;min-height:0;flex:0 0 24px;accent-color:var(--red)}
+.rv.off{opacity:.45}
+.rv .note{flex:1 1 100%;font-size:13px;color:var(--warn);font-weight:600}
 .warnbox{background:var(--red);color:var(--red-ink);font-weight:600;border-radius:12px;padding:12px 14px;margin:16px 0 0}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:10px 16px;border-radius:10px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
 .toast.show{opacity:1}
@@ -155,6 +152,14 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       <button type="button" class="btn btn-ghost" id="btnCancel" hidden style="margin-top:10px;width:100%">Annuler la modification</button>
       <p class="hint">« Absent » garde l’adresse dans la liste à repasser, sans montant.</p>
     </form>
+  </section>
+
+  <section class="card" id="photoCard" hidden aria-labelledby="photoTitle">
+    <h2 id="photoTitle">Importer une feuille papier</h2>
+    <p class="hint" style="margin-top:0">Photographiez votre feuille de tournée : les adresses, noms et montants sont lus automatiquement. Vous vérifiez chaque ligne avant de l’ajouter.</p>
+    <button type="button" class="btn btn-alt" id="btnPhoto" style="width:100%">📷 Photographier une feuille</button>
+    <input type="file" id="photoIn" accept="image/*" multiple hidden>
+    <div id="review"></div>
   </section>
 
   <div class="toolbar">
@@ -259,6 +264,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       $("btnCsv").onclick=()=>exportXlsx(null);
       return;
     }
+    initPhoto();
     try{
       const [db,user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
       const uid = user ? await user.id() : null;
@@ -462,6 +468,87 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       toast(add.length?add.length+" passage(s) restauré(s)":"Rien de nouveau dans ce fichier");
     }catch(e){ toast("Fichier de sauvegarde illisible"); }
   });
+
+  /* ---------- Import depuis une photo de feuille (version Claude) ---------- */
+  let sampleFn=null, pending=[];
+  const PROMPT="Ces photos montrent une ou plusieurs feuilles papier d'une tournée de vente de calendriers de sapeurs-pompiers en France, souvent écrites à la main. Recopie chaque ligne correspondant à un foyer visité. "+
+    "Réponds uniquement avec un tableau JSON, un objet par ligne, de la forme "+
+    "{\"num\": numéro dans la rue (texte, \"\" si absent), \"rue\": nom de la rue (\"\" si absent ; si la rue n'est écrite qu'une fois pour un groupe de lignes, répète-la sur chaque ligne du groupe), "+
+    "\"nom\": nom du donateur (\"\" si absent), \"montant\": montant en euros (nombre, 0 si absent), "+
+    "\"mode\": \"Espèces\", \"Chèque\" ou \"CB\" (\"Chèque\" si la ligne indique chq, chèque ou un numéro de chèque ; \"Espèces\" si rien n'est précisé), "+
+    "\"absent\": true si la ligne indique absent, personne ou à repasser, sinon false, "+
+    "\"note\": autre remarque utile écrite sur la ligne, sinon \"\"}. "+
+    "N'invente aucune ligne et ne devine pas : si un nom ou un montant est difficile à lire, recopie ce que tu lis et écris \"à vérifier\" dans note. "+
+    "N'inclus pas les lignes de total, les en-têtes ni les refus.";
+  async function initPhoto(){
+    try{
+      const s=await window.claude.use("sample"); if(!s) return;
+      const lim=await s.limits().catch(()=>null); if(!lim || !lim.images) return;
+      sampleFn=s;
+      $("photoIn").accept=lim.images.mediaTypes.join(",");
+      $("photoIn").dataset.max=lim.images.maxCount;
+      $("photoCard").hidden=false;
+    }catch(e){}
+  }
+  $("btnPhoto").onclick=()=>$("photoIn").click();
+  $("photoIn").addEventListener("change",async ev=>{
+    let files=[...ev.target.files]; ev.target.value=""; if(!files.length || !sampleFn) return;
+    const max=+$("photoIn").dataset.max||1;
+    if(files.length>max){ toast("Maximum "+max+" photos à la fois"); files=files.slice(0,max); }
+    const b=$("btnPhoto"), lbl=b.textContent; b.disabled=true; b.textContent="Lecture de la feuille…";
+    try{
+      const rows=await sampleFn.json(PROMPT,{images:files});
+      const list=(Array.isArray(rows)?rows:(rows&&rows.passages)||[]).filter(r=>r && (r.nom||r.rue||r.montant));
+      if(!list.length){ toast("Aucun passage lu sur la photo"); return; }
+      pending=list.map(r=>({num:String(r.num??"").trim(), rue:String(r.rue??"").trim(), nom:String(r.nom??"").trim(),
+        montant:(typeof r.montant==="number"?r.montant:parseFloat(String(r.montant??"").replace(",",".")))||0,
+        mode:["Espèces","Chèque","CB"].includes(r.mode)?r.mode:"Espèces", absent:!!r.absent, note:String(r.note??"").trim(), ok:true}));
+      renderReview();
+      $("photoCard").scrollIntoView({behavior:"smooth",block:"start"});
+    }catch(e){
+      toast(e && e.code==="not_granted" ? "Autorisation refusée" : "Lecture impossible : réessayez avec une photo plus nette");
+    }finally{ b.disabled=false; b.textContent=lbl; }
+  });
+  function renderReview(){
+    const box=$("review"); box.replaceChildren();
+    if(!pending.length) return;
+    const head=el("p","hint"); box.append(head);
+    pending.forEach(p=>{
+      const row=el("div","rv");
+      const cb=document.createElement("input"); cb.type="checkbox"; cb.checked=p.ok; cb.setAttribute("aria-label","Garder cette ligne");
+      cb.onchange=()=>{ p.ok=cb.checked; row.classList.toggle("off",!p.ok); upd(); };
+      const f=(k,ph,flex,num)=>{ const x=document.createElement("input"); x.value=p[k]; x.placeholder=ph; x.style.flex=flex; x.setAttribute("aria-label",ph);
+        if(num){ x.type="number"; x.inputMode="decimal"; x.step="0.5"; x.min="0"; }
+        x.oninput=()=>{ p[k]=num?(parseFloat(String(x.value).replace(",","."))||0):x.value; upd(); }; return x; };
+      const sel=document.createElement("select"); sel.setAttribute("aria-label","Paiement");
+      ["Espèces","Chèque","CB","À repasser"].forEach(m=>{ const o=document.createElement("option"); o.textContent=m; sel.append(o); });
+      sel.value=p.absent?"À repasser":p.mode; sel.style.flex="0 0 120px";
+      sel.onchange=()=>{ p.absent=sel.value==="À repasser"; if(!p.absent) p.mode=sel.value; upd(); };
+      row.append(cb, f("num","N°","0 0 60px"), f("rue","Rue","1 1 150px"), f("nom","Nom","1 1 150px"), f("montant","Montant €","0 0 90px",true), sel);
+      if(p.note) row.append(el("div","note","⚠ "+p.note));
+      box.append(row);
+    });
+    const act=el("div","actions");
+    const cancel=el("button","btn btn-alt","Annuler"); cancel.type="button"; cancel.onclick=()=>{ pending=[]; renderReview(); };
+    const add=el("button","btn btn-main"); add.type="button"; add.onclick=addPending;
+    act.append(cancel,add); box.append(act);
+    function upd(){
+      const keep=pending.filter(p=>p.ok), tot=keep.filter(p=>!p.absent).reduce((s,p)=>s+(+p.montant||0),0);
+      head.textContent="Comparez chaque ligne avec la feuille et corrigez si besoin. Total lu : "+eur(tot)+" pour "+keep.filter(p=>!p.absent).length+" calendrier(s).";
+      add.textContent="Ajouter "+keep.length+" passage"+(keep.length>1?"s":""); add.disabled=!keep.length;
+    }
+    upd();
+  }
+  async function addPending(){
+    const keep=pending.filter(p=>p.ok); let n=0;
+    for(const p of keep){
+      const e={id:Date.now().toString(36)+Math.random().toString(36).slice(2,7), num:p.num, rue:p.rue, nom:p.nom,
+        montant:p.absent?0:(+p.montant||0), mode:p.absent?"":p.mode, note:p.note, absent:p.absent, ts:Date.now()};
+      try{ await store.save(e); n++; }catch(err){}
+    }
+    pending=[]; renderReview();
+    toast(n+" passage"+(n>1?"s":"")+" ajouté"+(n>1?"s":""));
+  }
 
   /* ---------- Export Excel (2 onglets) ---------- */
   let xlLoading=null;
