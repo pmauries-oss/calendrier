@@ -187,9 +187,11 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       <span><i style="background:#111"></i>Refus</span>
       <span><i style="background:#D62828"></i>Absent</span>
       <span><i style="background:#1A73E8"></i>Moi</span>
+      <span><b style="display:inline-block;width:18px;height:4px;background:#1A73E8;opacity:.6;vertical-align:3px;margin-right:5px;border-radius:2px"></b>Mon trajet</span>
       <button type="button" class="btn btn-alt btn-sm" id="btnMe" style="margin-left:auto;flex:0 0 auto">📍 Me centrer</button>
     </div>
-    <p class="hint" id="mapMsg">Chaque passage enregistré est placé à l’endroit où vous étiez.</p>
+    <p class="hint" id="mapMsg">Chaque passage est placé à l’endroit où vous étiez ; les anciens passages sont placés d’après leur adresse.</p>
+    <button type="button" class="btn btn-ghost btn-sm" id="btnTrace" style="width:100%">Effacer le trajet</button>
   </section>
 
   <div class="toolbar">
@@ -400,7 +402,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   $("btnReset").onclick=async()=>{
     if(!entries.length) return;
     if(!confirm("Effacer toute la tournée ("+entries.length+" lignes) ? Pensez à exporter avant.")) return;
-    try{ await store.clear(); toast("Tournée effacée"); }catch(e){ toast("Effacement incomplet"); }
+    try{ await store.clear(); trace=[]; try{ localStorage.removeItem(TR_KEY); }catch(e){} if(map) drawTrace(); toast("Tournée effacée"); }catch(e){ toast("Effacement incomplet"); }
   };
 
   /* ---------- Liste ---------- */
@@ -492,6 +494,63 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   };
 
   /* ---------- Carte (version GitHub) ---------- */
+  const TR_KEY="calendriers-trace";
+  let trace=[]; try{ trace=JSON.parse(localStorage.getItem(TR_KEY)||"[]"); }catch(e){ trace=[]; }
+  let traceLayer=null, traceDirty=0;
+  const dist=(a,b,c,d)=>{ const R=6371000,t=Math.PI/180,x=(d-b)*t*Math.cos((a+c)/2*t),y=(c-a)*t; return Math.sqrt(x*x+y*y)*R; };
+  function addTrace(f){
+    if(f.acc>40) return;
+    const l=trace[trace.length-1];
+    if(l && dist(l[0],l[1],f.lat,f.lon)<12) return;
+    trace.push([+f.lat.toFixed(6),+f.lon.toFixed(6),Date.now()]);
+    if(trace.length>8000) trace=trace.slice(-8000);
+    if(++traceDirty>=3 || !l){ traceDirty=0; try{ localStorage.setItem(TR_KEY,JSON.stringify(trace)); }catch(e){} }
+    drawTrace();
+  }
+  function drawTrace(){
+    if(!map) return;
+    if(!traceLayer) traceLayer=Lf.layerGroup().addTo(map);
+    traceLayer.clearLayers();
+    let seg=[];
+    const flush=()=>{ if(seg.length>1) Lf.polyline(seg,{color:"#1A73E8",weight:5,opacity:.55,interactive:false}).addTo(traceLayer); seg=[]; };
+    trace.forEach((p,i)=>{ if(i && p[2]-trace[i-1][2]>15*60000) flush(); seg.push([p[0],p[1]]); });
+    flush();
+  }
+  $("btnTrace").onclick=()=>{
+    if(!trace.length){ toast("Aucun trajet enregistré"); return; }
+    if(!confirm("Effacer le trajet affiché sur la carte ? Les passages ne sont pas touchés.")) return;
+    trace=[]; try{ localStorage.removeItem(TR_KEY); }catch(e){} drawTrace(); toast("Trajet effacé");
+  };
+
+  /* placer les passages sans position d'après leur adresse */
+  const geoTried=new Set(); let geoBusy=false;
+  async function geocodeMissing(){
+    if(geoBusy) return;
+    const todo=entries.filter(e=>e.lat==null && e.rue && !geoTried.has(e.id));
+    if(!todo.length) return;
+    const ref=entries.find(e=>e.lat!=null&&!e.geo) || (lastFix?{lat:lastFix.lat,lon:lastFix.lon}:null);
+    if(!ref) return;
+    geoBusy=true; let n=0;
+    for(const e of todo){
+      geoTried.add(e.id);
+      const q=encodeURIComponent(((e.num||"")+" "+e.rue).trim());
+      const urls=["https://data.geopf.fr/geocodage/search?index=address&limit=1&q="+q+"&lat="+ref.lat+"&lon="+ref.lon,
+                  "https://api-adresse.data.gouv.fr/search/?limit=1&q="+q+"&lat="+ref.lat+"&lon="+ref.lon];
+      for(const u of urls){
+        try{
+          const r=await fetch(u); if(!r.ok) continue;
+          const f=(await r.json()).features?.[0]; if(!f) break;
+          const [lon,lat]=f.geometry.coordinates;
+          if((f.properties.score||0)<0.5 || dist(ref.lat,ref.lon,lat,lon)>15000) break;
+          const upd=Object.assign({},e,{lat:+lat.toFixed(6),lon:+lon.toFixed(6),geo:"adresse"});
+          await store.save(upd); n++; break;
+        }catch(err){}
+      }
+    }
+    geoBusy=false;
+    if(n) toast(n+" ancien(s) passage(s) placé(s) sur la carte");
+  }
+
   let map=null, layer=null, meDot=null, meRing=null, watchId=null, centered=false, Lf=null;
   function loadLeaflet(){
     if(window.L) return Promise.resolve(window.L);
@@ -508,14 +567,17 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       Lf=await loadLeaflet();
       map=Lf.map("map").setView([46.6,2.4],5);
       Lf.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);
+      drawTrace();
       layer=Lf.layerGroup().addTo(map);
-      drawMap(true); drawMe();
+      drawMap(true); drawMe(); geocodeMissing();
     }catch(e){ $("mapMsg").textContent="Carte indisponible sans connexion internet. Les positions sont quand même enregistrées."; }
   }
   function startWatch(){
     if(!navigator.geolocation || watchId!==null) return;
     watchId=navigator.geolocation.watchPosition(p=>{
-      lastFix={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy||0,t:Date.now()}; drawMe();
+      const first=!lastFix;
+      lastFix={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy||0,t:Date.now()}; drawMe(); addTrace(lastFix);
+      if(first) geocodeMissing();
     },err=>{ if(err.code===1) $("mapMsg").textContent="Autorisez la localisation pour ce site afin d’enregistrer la position des passages."; },
     {enableHighAccuracy:true,maximumAge:10000,timeout:30000});
   }
@@ -542,6 +604,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       m.bindPopup(pop); m.addTo(layer); pts.push([e.lat,e.lon]);
     }
     if(fit && !lastFix && pts.length) map.fitBounds(pts,{padding:[30,30],maxZoom:18});
+    if(entries.some(e=>e.lat==null && e.rue && !geoTried.has(e.id))) setTimeout(geocodeMissing,500);
   }
   $("btnMe").onclick=()=>{
     if(!lastFix){ toast("Position pas encore trouvée"); startWatch(); return; }
