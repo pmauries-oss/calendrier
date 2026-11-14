@@ -112,6 +112,8 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
 .rv .note{flex:1 1 100%;font-size:13px;color:var(--warn);font-weight:600}
 .warnbox{background:var(--red);color:var(--red-ink);font-weight:600;border-radius:12px;padding:12px 14px;margin:16px 0 0}
 .mapbox{height:340px;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--chip)}
+.mapinfo{margin:10px 0 0;font-size:14px;font-weight:600;line-height:1.5}
+.mapinfo:empty{display:none}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:14px;margin:10px 0 0;align-items:center}
 .legend i{display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #8884;vertical-align:-2px;margin-right:5px}
 .btn-sm{font-size:16px;min-height:42px;padding:8px 12px}
@@ -190,8 +192,14 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       <span><b style="display:inline-block;width:18px;height:4px;background:#1A73E8;opacity:.6;vertical-align:3px;margin-right:5px;border-radius:2px"></b>Mon trajet</span>
       <button type="button" class="btn btn-alt btn-sm" id="btnMe" style="margin-left:auto;flex:0 0 auto">📍 Me centrer</button>
     </div>
+    <p class="mapinfo" id="mapInfo"></p>
     <p class="hint" id="mapMsg">Chaque passage est placé à l’endroit où vous étiez ; les anciens passages sont placés d’après leur adresse.</p>
-    <button type="button" class="btn btn-ghost btn-sm" id="btnTrace" style="width:100%">Effacer le trajet</button>
+    <label for="commune">Commune de la tournée</label>
+    <input id="commune" placeholder="Ex. Beaurepaire" autocapitalize="words">
+    <div class="actions" style="margin-top:10px">
+      <button type="button" class="btn btn-main btn-sm" id="btnFit">Voir toute la tournée</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="btnTrace" style="flex:1">Effacer le trajet</button>
+    </div>
   </section>
 
   <div class="toolbar">
@@ -527,30 +535,50 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   async function geocodeMissing(){
     if(geoBusy) return;
     const todo=entries.filter(e=>e.lat==null && e.rue && !geoTried.has(e.id));
-    if(!todo.length) return;
+    if(!todo.length){ mapInfo(); return; }
     const ref=entries.find(e=>e.lat!=null&&!e.geo) || (lastFix?{lat:lastFix.lat,lon:lastFix.lon}:null);
-    if(!ref) return;
+    const com=commune();
+    if(!ref && !com){ mapInfo(); return; }
     geoBusy=true; let n=0;
     for(const e of todo){
       geoTried.add(e.id);
-      const q=encodeURIComponent(((e.num||"")+" "+e.rue).trim());
-      const urls=["https://data.geopf.fr/geocodage/search?index=address&limit=1&q="+q+"&lat="+ref.lat+"&lon="+ref.lon,
-                  "https://api-adresse.data.gouv.fr/search/?limit=1&q="+q+"&lat="+ref.lat+"&lon="+ref.lon];
+      const q=encodeURIComponent(((e.num||"")+" "+e.rue+(com?" "+com:"")).trim());
+      const bias=ref?"&lat="+ref.lat+"&lon="+ref.lon:"";
+      const urls=["https://data.geopf.fr/geocodage/search?index=address&limit=1&q="+q+bias,
+                  "https://api-adresse.data.gouv.fr/search/?limit=1&q="+q+bias];
       for(const u of urls){
         try{
           const r=await fetch(u); if(!r.ok) continue;
           const f=(await r.json()).features?.[0]; if(!f) break;
           const [lon,lat]=f.geometry.coordinates;
-          if((f.properties.score||0)<0.5 || dist(ref.lat,ref.lon,lat,lon)>15000) break;
+          if((f.properties.score||0)<0.5 || (ref && !com && dist(ref.lat,ref.lon,lat,lon)>15000)) break;
           const upd=Object.assign({},e,{lat:+lat.toFixed(6),lon:+lon.toFixed(6),geo:"adresse"});
           await store.save(upd); n++; break;
         }catch(err){}
       }
     }
-    geoBusy=false;
-    if(n) toast(n+" ancien(s) passage(s) placé(s) sur la carte");
+    geoBusy=false; mapInfo();
+    if(n){ toast(n+" ancien(s) passage(s) placé(s) sur la carte"); fitAll(); }
   }
 
+  function commune(){ try{ return (localStorage.getItem("calendriers-commune")||"").trim(); }catch(e){ return ""; } }
+  let posState="Position : recherche en cours…";
+  function mapInfo(){
+    const box=$("mapInfo"); if(!box) return;
+    const tot=entries.length, on=entries.filter(e=>e.lat!=null).length, off=entries.filter(e=>e.lat==null && e.rue && geoTried.has(e.id)).length;
+    let t=posState+"\n"+on+" passage"+(on>1?"s":"")+" sur la carte, sur "+tot;
+    if(off) t+=" ("+off+" adresse"+(off>1?"s":"")+" introuvable"+(off>1?"s":"")+")";
+    if(tot>on && !commune() && !lastFix) t+="\nIndiquez la commune ci-dessous pour placer les anciens passages.";
+    t+="\nTrajet : "+(trace.length>1?trace.length+" points enregistrés":"pas encore enregistré");
+    box.textContent=t; box.style.whiteSpace="pre-line";
+  }
+  function fitAll(){
+    if(!map) return;
+    const pts=entries.filter(e=>e.lat!=null).map(e=>[e.lat,e.lon]).concat(trace.map(p=>[p[0],p[1]]));
+    if(lastFix) pts.push([lastFix.lat,lastFix.lon]);
+    if(!pts.length){ toast("Rien à afficher pour l’instant"); return; }
+    if(pts.length===1) map.setView(pts[0],18); else map.fitBounds(pts,{padding:[30,30],maxZoom:18});
+  }
   let map=null, layer=null, meDot=null, meRing=null, watchId=null, centered=false, Lf=null;
   function loadLeaflet(){
     if(window.L) return Promise.resolve(window.L);
@@ -565,7 +593,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     startWatch();
     try{
       Lf=await loadLeaflet();
-      map=Lf.map("map").setView([46.6,2.4],5);
+      map=Lf.map("map",{tap:false}).setView([46.6,2.4],5);
       Lf.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);
       drawTrace();
       layer=Lf.layerGroup().addTo(map);
@@ -576,9 +604,14 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     if(!navigator.geolocation || watchId!==null) return;
     watchId=navigator.geolocation.watchPosition(p=>{
       const first=!lastFix;
+      posState="Position : trouvée (précision ±"+Math.round(p.coords.accuracy||0)+" m)";
       lastFix={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy||0,t:Date.now()}; drawMe(); addTrace(lastFix);
       if(first) geocodeMissing();
-    },err=>{ if(err.code===1) $("mapMsg").textContent="Autorisez la localisation pour ce site afin d’enregistrer la position des passages."; },
+      if(first || trace.length%5===0) mapInfo();
+    },err=>{
+      posState = err.code===1 ? "Position : refusée. sur iPhone : Réglages › Confidentialité et sécurité › Service de localisation › Sites web Safari, puis « Lorsque l’app est active »." : "Position : introuvable pour l’instant (réessai automatique)";
+      mapInfo();
+    },
     {enableHighAccuracy:true,maximumAge:10000,timeout:30000});
   }
   function drawMe(){
@@ -588,7 +621,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       meRing=Lf.circle(ll,{radius:lastFix.acc,color:"#1A73E8",weight:1,fillOpacity:.12,interactive:false}).addTo(map);
       meDot=Lf.circleMarker(ll,{radius:8,color:"#fff",weight:3,fillColor:"#1A73E8",fillOpacity:1}).addTo(map);
     }else{ meDot.setLatLng(ll); meRing.setLatLng(ll).setRadius(lastFix.acc); }
-    if(!centered){ centered=true; map.setView(ll,18); }
+    if(!centered){ centered=true; if(entries.some(e=>e.lat!=null)||trace.length>1) fitAll(); else map.setView(ll,18); }
   }
   function drawMap(fit){
     if(!map || !layer) return;
@@ -605,7 +638,14 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     }
     if(fit && !lastFix && pts.length) map.fitBounds(pts,{padding:[30,30],maxZoom:18});
     if(entries.some(e=>e.lat==null && e.rue && !geoTried.has(e.id))) setTimeout(geocodeMissing,500);
+    mapInfo();
   }
+  $("btnFit").onclick=fitAll;
+  $("commune").value=commune();
+  $("commune").addEventListener("change",()=>{
+    try{ localStorage.setItem("calendriers-commune",$("commune").value.trim()); }catch(e){}
+    geoTried.clear(); geocodeMissing();
+  });
   $("btnMe").onclick=()=>{
     if(!lastFix){ toast("Position pas encore trouvée"); startWatch(); return; }
     if(map) map.setView([lastFix.lat,lastFix.lon],18);
