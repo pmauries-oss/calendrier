@@ -3,6 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#C1121F">
+<meta name="apple-mobile-web-app-title" content="Calendriers">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Tournée des calendriers</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -72,7 +80,10 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
 .filters .pill{padding:8px 12px;min-height:40px;font-size:15px}
 .street{font:700 18px "Barlow Condensed",sans-serif;color:var(--muted);margin:18px 2px 6px;display:flex;justify-content:space-between}
 .item{background:var(--surface);border:1px solid var(--line);border-left:5px solid var(--ok);border-radius:10px;padding:10px 12px;margin-bottom:8px;display:flex;gap:10px;align-items:center}
-.item.absent{border-left-color:var(--warn)}
+.item.absent{border-left-color:#D62828}
+.item.refus{border-left-color:#111;border-left-width:6px}
+.item .tag.ref{color:var(--ink)}
+.item .tag.abs{color:#D62828}
 .item .who{flex:1;min-width:0}
 .item .name{font-weight:600}
 .item .addr{font-size:14px;color:var(--muted)}
@@ -100,6 +111,10 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
 .rv.off{opacity:.45}
 .rv .note{flex:1 1 100%;font-size:13px;color:var(--warn);font-weight:600}
 .warnbox{background:var(--red);color:var(--red-ink);font-weight:600;border-radius:12px;padding:12px 14px;margin:16px 0 0}
+.mapbox{height:340px;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:var(--chip)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:14px;margin:10px 0 0;align-items:center}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px #8884;vertical-align:-2px;margin-right:5px}
+.btn-sm{font-size:16px;min-height:42px;padding:8px 12px}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:10px 16px;border-radius:10px;font-weight:600;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
 .toast.show{opacity:1}
 @media (prefers-reduced-motion:reduce){.toast{transition:none}}
@@ -113,7 +128,8 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     <div class="stats">
       <span><b id="nbCal">0</b> calendriers</span>
       <span><b id="moy">0 €</b> en moyenne</span>
-      <span><b id="nbAbs">0</b> à repasser</span>
+      <span><b id="nbAbs">0</b> absents</span>
+      <span><b id="nbRef">0</b> refus</span>
     </div>
   </header>
 
@@ -147,10 +163,11 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       <input id="note" placeholder="Chien, sonnette HS, repasser samedi…">
       <div class="actions">
         <button type="button" class="btn btn-alt" id="btnAbs">Absent</button>
+        <button type="button" class="btn btn-alt" id="btnRef">Refus</button>
         <button type="button" class="btn btn-main" id="btnSave">Enregistrer</button>
       </div>
       <button type="button" class="btn btn-ghost" id="btnCancel" hidden style="margin-top:10px;width:100%">Annuler la modification</button>
-      <p class="hint">« Absent » garde l’adresse dans la liste à repasser, sans montant.</p>
+      <p class="hint">« Absent » garde l’adresse dans la liste à repasser. « Refus » note que la personne ne souhaite pas de calendrier.</p>
     </form>
   </section>
 
@@ -162,12 +179,26 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     <div id="review"></div>
   </section>
 
+  <section class="card" id="mapCard" hidden aria-labelledby="mapTitle">
+    <h2 id="mapTitle">Carte de la tournée</h2>
+    <div id="map" class="mapbox"></div>
+    <div class="legend">
+      <span><i style="background:#2E9E57"></i>Pris</span>
+      <span><i style="background:#111"></i>Refus</span>
+      <span><i style="background:#D62828"></i>Absent</span>
+      <span><i style="background:#1A73E8"></i>Moi</span>
+      <button type="button" class="btn btn-alt btn-sm" id="btnMe" style="margin-left:auto;flex:0 0 auto">📍 Me centrer</button>
+    </div>
+    <p class="hint" id="mapMsg">Chaque passage enregistré est placé à l’endroit où vous étiez.</p>
+  </section>
+
   <div class="toolbar">
     <input id="q" type="search" placeholder="Chercher un nom ou une rue">
     <div class="filters" id="filters">
       <button class="pill" data-f="all" aria-pressed="true">Tous</button>
       <button class="pill" data-f="paye" aria-pressed="false">Payés</button>
-      <button class="pill" data-f="abs" aria-pressed="false">À repasser</button>
+      <button class="pill" data-f="abs" aria-pressed="false">Absents</button>
+      <button class="pill" data-f="ref" aria-pressed="false">Refus</button>
     </div>
   </div>
   <div id="list"></div>
@@ -205,6 +236,10 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   let filter = "all";
   let editingId = null;
   let store = null;           // {save(e), remove(id), clear()}
+  const isPaid = e => !e.absent && !e.refus;
+  const COL = {paye:"#2E9E57", refus:"#111111", absent:"#D62828"};
+  const kindOf = e => e.refus ? "refus" : (e.absent ? "absent" : "paye");
+  let lastFix = null;
   const eur = v => (Math.round(v*100)/100).toLocaleString("fr-FR",{minimumFractionDigits:0,maximumFractionDigits:2}) + " €";
 
   function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove("show"),1800);}
@@ -262,6 +297,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       // version téléchargée : export Excel + sauvegarde fichier
       $("btnCsv").hidden=false; $("bakBox").hidden=false; $("btnLoc").hidden=false;
       $("btnCsv").onclick=()=>exportXlsx(null);
+      initMap();
       return;
     }
     initPhoto();
@@ -309,25 +345,33 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   });
   function setMode(m){ mode=m; document.querySelectorAll("#modes .pill").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.m===m))); }
 
-  function collect(absent){
+  function collect(kind){
+    const absent = kind==="absent", refus = kind==="refus", noPay = absent||refus;
     const rue=$("rue").value.trim(), nom=$("nom").value.trim();
     if(!rue && !nom){ toast("Indiquez au moins une rue ou un nom"); $("rue").focus(); return null; }
     const m=parseFloat(String($("montant").value).replace(",","."));
-    if(!absent && !(m>0)){ toast("Indiquez un montant"); $("montant").focus(); return null; }
+    if(!noPay && !(m>0)){ toast("Indiquez un montant"); $("montant").focus(); return null; }
     const old = editingId ? entries.find(x=>x.id===editingId) : null;
     return { id: editingId || (Date.now().toString(36)+Math.random().toString(36).slice(2,7)),
-      num:$("num").value.trim(), rue, nom, montant: absent?0:m, mode: absent?"":mode,
-      note:$("note").value.trim(), absent:!!absent, ts: old? old.ts : Date.now() };
+      num:$("num").value.trim(), rue, nom, montant: noPay?0:m, mode: noPay?"":mode,
+      note:$("note").value.trim(), absent, refus, ts: old? old.ts : Date.now(), ...posFor(old) };
   }
-  async function submit(absent){
-    const e=collect(absent); if(!e) return;
+  function posFor(old){
+    if(old && old.lat!=null) return {lat:old.lat, lon:old.lon};
+    if(old) return {};
+    if(lastFix && Date.now()-lastFix.t<120000 && lastFix.acc<150) return {lat:+lastFix.lat.toFixed(6), lon:+lastFix.lon.toFixed(6)};
+    return {};
+  }
+  async function submit(kind){
+    const e=collect(kind); if(!e) return;
     const wasEdit=!!editingId;
     try{ await store.save(e); }catch(err){ toast("Enregistrement refusé, réessayez"); return; }
-    toast(absent?"Noté à repasser":(wasEdit?"Modifié":"Enregistré : "+eur(e.montant)));
+    toast(kind==="absent"?"Noté absent, à repasser":kind==="refus"?"Noté : refus":(wasEdit?"Modifié":"Enregistré : "+eur(e.montant)));
     resetForm(true);
   }
-  $("btnSave").onclick=()=>submit(false);
-  $("btnAbs").onclick=()=>submit(true);
+  $("btnSave").onclick=()=>submit("paye");
+  $("btnAbs").onclick=()=>submit("absent");
+  $("btnRef").onclick=()=>submit("refus");
   $("btnCancel").onclick=()=>resetForm(false);
 
   function resetForm(keepStreet){
@@ -342,10 +386,10 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     const e=entries.find(x=>x.id===id); if(!e) return;
     editingId=id;
     $("num").value=e.num||""; $("rue").value=e.rue||""; $("nom").value=e.nom||"";
-    $("montant").value=e.absent?"":e.montant; $("note").value=e.note||"";
+    $("montant").value=isPaid(e)?e.montant:""; $("note").value=e.note||"";
     markAmount(); setMode(e.mode||"Espèces");
     $("formTitle").textContent="Modifier le passage"; $("btnCancel").hidden=false;
-    $("btnSave").textContent=e.absent?"Enregistrer le don":"Enregistrer";
+    $("btnSave").textContent=isPaid(e)?"Enregistrer":"Enregistrer le don";
     $("form").scrollIntoView({behavior:"smooth",block:"start"});
   }
   async function del(id){
@@ -370,12 +414,14 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   function el(tag,cls,txt){ const n=document.createElement(tag); if(cls)n.className=cls; if(txt!=null)n.textContent=txt; return n; }
 
   function render(){
-    const paid=entries.filter(e=>!e.absent), abs=entries.filter(e=>e.absent);
+    const paid=entries.filter(isPaid), abs=entries.filter(e=>e.absent&&!e.refus), refs=entries.filter(e=>e.refus);
     const sum=paid.reduce((s,e)=>s+(+e.montant||0),0);
     $("total").firstChild.nodeValue=(Math.round(sum*100)/100).toLocaleString("fr-FR");
     $("nbCal").textContent=paid.length;
     $("moy").textContent=paid.length?eur(sum/paid.length):"0 €";
     $("nbAbs").textContent=abs.length;
+    $("nbRef").textContent=refs.length;
+    drawMap(false);
     const by=m=>paid.filter(e=>e.mode===m).reduce((s,e)=>s+(+e.montant||0),0);
     $("tEsp").textContent=eur(by("Espèces"));
     $("tChq").textContent=eur(by("Chèque"));
@@ -388,7 +434,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     const dl=$("rues"); dl.replaceChildren(...rues.map(r=>{const o=document.createElement("option");o.value=r;return o;}));
 
     const q=$("q").value.trim().toLowerCase();
-    let list=entries.filter(e=> filter==="all" || (filter==="abs"?e.absent:!e.absent));
+    let list=entries.filter(e=> filter==="all" || kindOf(e)===(filter==="abs"?"absent":filter==="ref"?"refus":"paye"));
     if(q) list=list.filter(e=>[e.nom,e.rue,e.num,e.note].join(" ").toLowerCase().includes(q));
     list.sort((a,b)=>(a.rue||"").localeCompare(b.rue||"","fr")||numKey(a.num)-numKey(b.num));
 
@@ -402,16 +448,17 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
       const r=e.rue||"Sans rue";
       if(r!==cur){
         cur=r;
-        const inStreet=list.filter(x=>(x.rue||"Sans rue")===r && !x.absent).reduce((s,x)=>s+(+x.montant||0),0);
+        const inStreet=list.filter(x=>(x.rue||"Sans rue")===r && isPaid(x)).reduce((s,x)=>s+(+x.montant||0),0);
         const h=el("div","street"); h.append(el("span",null,r), el("span",null,eur(inStreet))); box.append(h);
       }
-      const it=el("div","item"+(e.absent?" absent":""));
+      const it=el("div","item"+(e.refus?" refus":(e.absent?" absent":"")));
       const who=el("div","who");
       who.append(el("div","name", e.nom||"(nom non noté)"));
       who.append(el("div","addr", [e.num,e.rue].filter(Boolean).join(" ")));
       if(e.note) who.append(el("div","note", e.note));
       const amt=el("div","amt");
-      if(e.absent){ amt.append(el("span","tag","À repasser")); }
+      if(e.refus){ amt.append(el("span","tag ref","Refus")); }
+      else if(e.absent){ amt.append(el("span","tag abs","Absent")); }
       else { amt.append(document.createTextNode(eur(+e.montant))); amt.append(el("small",null,e.mode)); }
       const be=el("button",null,"✎"); be.setAttribute("aria-label","Modifier"); be.onclick=()=>edit(e.id);
       const bd=el("button",null,"🗑"); bd.setAttribute("aria-label","Supprimer"); bd.onclick=()=>del(e.id);
@@ -431,6 +478,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     const b=$("btnLoc"), lbl=b.textContent; b.disabled=true; b.textContent="Localisation…";
     try{
       const p=await getPos();
+      lastFix={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy||0,t:Date.now()}; drawMe();
       const pr=await reverseGeo(p.coords.latitude,p.coords.longitude);
       if(!pr){ toast("Adresse introuvable, saisissez-la"); return; }
       $("num").value=pr.housenumber||"";
@@ -441,6 +489,63 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     }catch(e){
       toast(e&&e.code===1?"Autorisez la localisation pour ce site":"Position introuvable, réessayez");
     }finally{ b.disabled=false; b.textContent=lbl; }
+  };
+
+  /* ---------- Carte (version GitHub) ---------- */
+  let map=null, layer=null, meDot=null, meRing=null, watchId=null, centered=false, Lf=null;
+  function loadLeaflet(){
+    if(window.L) return Promise.resolve(window.L);
+    return new Promise((res,rej)=>{
+      const css=document.createElement("link"); css.rel="stylesheet"; css.href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"; document.head.append(css);
+      const s=document.createElement("script"); s.src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+      s.onload=()=>window.L?res(window.L):rej(); s.onerror=()=>rej(); document.head.append(s);
+    });
+  }
+  async function initMap(){
+    $("mapCard").hidden=false;
+    startWatch();
+    try{
+      Lf=await loadLeaflet();
+      map=Lf.map("map").setView([46.6,2.4],5);
+      Lf.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(map);
+      layer=Lf.layerGroup().addTo(map);
+      drawMap(true); drawMe();
+    }catch(e){ $("mapMsg").textContent="Carte indisponible sans connexion internet. Les positions sont quand même enregistrées."; }
+  }
+  function startWatch(){
+    if(!navigator.geolocation || watchId!==null) return;
+    watchId=navigator.geolocation.watchPosition(p=>{
+      lastFix={lat:p.coords.latitude,lon:p.coords.longitude,acc:p.coords.accuracy||0,t:Date.now()}; drawMe();
+    },err=>{ if(err.code===1) $("mapMsg").textContent="Autorisez la localisation pour ce site afin d’enregistrer la position des passages."; },
+    {enableHighAccuracy:true,maximumAge:10000,timeout:30000});
+  }
+  function drawMe(){
+    if(!map || !lastFix) return;
+    const ll=[lastFix.lat,lastFix.lon];
+    if(!meDot){
+      meRing=Lf.circle(ll,{radius:lastFix.acc,color:"#1A73E8",weight:1,fillOpacity:.12,interactive:false}).addTo(map);
+      meDot=Lf.circleMarker(ll,{radius:8,color:"#fff",weight:3,fillColor:"#1A73E8",fillOpacity:1}).addTo(map);
+    }else{ meDot.setLatLng(ll); meRing.setLatLng(ll).setRadius(lastFix.acc); }
+    if(!centered){ centered=true; map.setView(ll,18); }
+  }
+  function drawMap(fit){
+    if(!map || !layer) return;
+    layer.clearLayers(); const pts=[];
+    for(const e of entries){
+      if(e.lat==null || e.lon==null) continue;
+      const k=kindOf(e);
+      const m=Lf.circleMarker([e.lat,e.lon],{radius:9,color:"#fff",weight:2,fillColor:COL[k],fillOpacity:1});
+      const pop=document.createElement("div");
+      pop.append(el("b",null,e.nom||"(nom non noté)"), document.createElement("br"),
+        el("span",null,[e.num,e.rue].filter(Boolean).join(" ")), document.createElement("br"),
+        el("span",null,k==="paye"?eur(+e.montant)+" · "+e.mode:(k==="refus"?"Refus":"Absent")));
+      m.bindPopup(pop); m.addTo(layer); pts.push([e.lat,e.lon]);
+    }
+    if(fit && !lastFix && pts.length) map.fitBounds(pts,{padding:[30,30],maxZoom:18});
+  }
+  $("btnMe").onclick=()=>{
+    if(!lastFix){ toast("Position pas encore trouvée"); startWatch(); return; }
+    if(map) map.setView([lastFix.lat,lastFix.lon],18);
   };
 
   /* ---------- Sauvegarde / restauration ---------- */
@@ -566,7 +671,7 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
   async function buildWorkbook(ExcelJS, list){
     const RED="FFC1121F", INK="FF1C2430", LIGHT="FFF3F4F6", EUR='#,##0.00 "€"';
     const sorted=list.slice().sort((a,b)=>(a.rue||"").localeCompare(b.rue||"","fr")||numKey(a.num)-numKey(b.num));
-    const paid=sorted.filter(e=>!e.absent), abs=sorted.filter(e=>e.absent);
+    const paid=sorted.filter(isPaid), abs=sorted.filter(e=>e.absent&&!e.refus), refs=sorted.filter(e=>e.refus);
     const sum=paid.reduce((s,e)=>s+(+e.montant||0),0);
     const wb=new ExcelJS.Workbook(); wb.creator="Tournée des calendriers"; wb.created=new Date();
     const head=(row)=>{ row.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:RED}}; c.alignment={vertical:"middle"}; }); row.height=22; };
@@ -580,8 +685,8 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     sorted.forEach(e=>{
       const n=parseInt(e.num,10);
       const r=ws.addRow({num:(String(n)===String(e.num).trim()?n:(e.num||"")),rue:e.rue||"",nom:e.nom||"",
-        montant:e.absent?null:(+e.montant||0),mode:e.mode||"",statut:e.absent?"À repasser":"Payé",note:e.note||"",date:new Date(e.ts)});
-      if(e.absent) r.getCell("statut").font={bold:true,color:{argb:"FFB45309"}};
+        montant:isPaid(e)?(+e.montant||0):null,mode:e.mode||"",statut:e.refus?"Refus":(e.absent?"Absent":"Pris"),note:e.note||"",date:new Date(e.ts)});
+      r.getCell("statut").font={bold:true,color:{argb:e.refus?"FF111111":(e.absent?"FFD62828":"FF2E9E57")}};
     });
     const last=ws.rowCount;
     ws.autoFilter={from:"A1",to:{row:Math.max(last,1),column:8}};
@@ -591,8 +696,8 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
 
     /* Onglet 2 : Bilan */
     const b=wb.addWorksheet("Bilan");
-    b.columns=[{width:30},{width:14},{width:14},{width:14}];
-    b.mergeCells("A1:D1");
+    b.columns=[{width:30},{width:14},{width:14},{width:12},{width:10}];
+    b.mergeCells("A1:E1");
     const t=b.getCell("A1"); t.value="Tournée des calendriers : bilan"; t.font={bold:true,size:16,color:{argb:"FFFFFFFF"}};
     t.fill={type:"pattern",pattern:"solid",fgColor:{argb:RED}}; b.getRow(1).height=30; t.alignment={vertical:"middle"};
     b.getCell("A2").value="Export du "+new Date().toLocaleDateString("fr-FR")+" à "+new Date().toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"});
@@ -602,7 +707,8 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     const totRow=kv("Total collecté",sum,EUR); totRow.getCell(2).font={bold:true,size:14,color:{argb:RED}};
     kv("Calendriers distribués",paid.length);
     kv("Moyenne par calendrier",paid.length?sum/paid.length:0,EUR);
-    kv("Adresses à repasser",abs.length);
+    kv("Absents (à repasser)",abs.length);
+    kv("Refus",refs.length);
 
     b.addRow([]);
     head(b.addRow(["Par mode de paiement","Nombre","Montant"]));
@@ -614,13 +720,13 @@ input:focus,select:focus,textarea:focus,button:focus-visible{outline:3px solid c
     tm.eachCell({includeEmpty:true},c=>{ c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:LIGHT}}; });
 
     b.addRow([]);
-    head(b.addRow(["Par rue","Calendriers","Montant","À repasser"]));
+    head(b.addRow(["Par rue","Calendriers","Montant","Absents","Refus"]));
     const rues=[...new Set(sorted.map(e=>e.rue||"Sans rue"))];
     rues.forEach(rue=>{
-      const l=sorted.filter(e=>(e.rue||"Sans rue")===rue), p=l.filter(e=>!e.absent);
-      const r=b.addRow([rue,p.length,p.reduce((s,e)=>s+(+e.montant||0),0),l.length-p.length]); r.getCell(3).numFmt=EUR;
+      const l=sorted.filter(e=>(e.rue||"Sans rue")===rue), p=l.filter(isPaid);
+      const r=b.addRow([rue,p.length,p.reduce((s,e)=>s+(+e.montant||0),0),l.filter(e=>e.absent&&!e.refus).length,l.filter(e=>e.refus).length]); r.getCell(3).numFmt=EUR;
     });
-    const tr2=b.addRow(["Total",paid.length,sum,abs.length]); tr2.getCell(3).numFmt=EUR;
+    const tr2=b.addRow(["Total",paid.length,sum,abs.length,refs.length]); tr2.getCell(3).numFmt=EUR;
     tr2.eachCell({includeEmpty:true},c=>{ c.font={bold:true}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:LIGHT}}; });
     return wb;
   }
